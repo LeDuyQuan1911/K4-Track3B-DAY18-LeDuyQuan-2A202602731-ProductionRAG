@@ -7,8 +7,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- API Keys ---
+# --- API Keys & LLM Configuration ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Auto-detect Gemini key if in OPENAI_API_KEY or GEMINI_API_KEY
+if not GEMINI_API_KEY and OPENAI_API_KEY.startswith("AIza"):
+    GEMINI_API_KEY = OPENAI_API_KEY
+
+if GEMINI_API_KEY:
+    LLM_API_KEY = GEMINI_API_KEY
+    LLM_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+    LLM_MODEL = "gemini-3.8-flash"
+    os.environ["OPENAI_API_KEY"] = GEMINI_API_KEY
+    os.environ["OPENAI_BASE_URL"] = LLM_BASE_URL
+else:
+    LLM_API_KEY = OPENAI_API_KEY
+    LLM_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
+    LLM_MODEL = "gpt-4o-mini"
+
+
+def get_openai_client():
+    from openai import OpenAI
+    if LLM_BASE_URL:
+        return OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    return OpenAI(api_key=LLM_API_KEY)
+
+
+def get_chat_model(temperature: float = 0.0):
+    from langchain_openai import ChatOpenAI
+    kwargs = {"model": LLM_MODEL, "api_key": LLM_API_KEY, "temperature": temperature}
+    if LLM_BASE_URL:
+        kwargs["base_url"] = LLM_BASE_URL
+    return ChatOpenAI(**kwargs)
 
 # --- Qdrant ---
 QDRANT_HOST = "localhost"
