@@ -1,6 +1,8 @@
 """Shared configuration for Lab 18."""
 
 import os
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 from dotenv import load_dotenv
 
 load_dotenv()
