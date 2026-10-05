@@ -10,12 +10,12 @@
 
 | Metric | Naive Baseline | Production | Δ |
 |--------|---------------|------------|---|
-| Faithfulness | 0.6200 | 0.8850 | +0.2650 |
-| Answer Relevancy | 0.7100 | 0.8400 | +0.1300 |
-| Context Precision | 0.5400 | 0.8100 | +0.2700 |
-| Context Recall | 0.6000 | 0.7900 | +0.1900 |
+| Faithfulness | 0.7824 | 0.8542 | +0.0718 |
+| Answer Relevancy | 0.6825 | 0.6893 | +0.0068 |
+| Context Precision | 0.8000 | 0.8583 | +0.0583 |
+| Context Recall | 0.8250 | 0.8070 | -0.0180 |
 
-*(Ghi chú: Điểm số cải thiện vượt bậc nhờ kết hợp Hybrid Search BM25 + Dense, Cross-Encoder Reranker lọc top-3 đắt giá nhất và kỹ thuật Contextual Prepend trong M5 giúp giữ ngữ cảnh tài liệu nguồn).*
+*(Ghi chú: Đánh giá thực nghiệm 100% trên toàn bộ 20 câu hỏi test_set với Google Gemini và BAAI/bge-m3. Faithfulness tăng từ 0.7824 lên 0.8542 (+7.18%), Context Precision tăng từ 0.8000 lên 0.8583 (+5.83%) nhờ Cross-Encoder Reranker BAAI/bge-reranker-v2-m3 lọc nhiễu chính xác và M5 Enrichment làm giàu ngữ cảnh).*
 
 ---
 
