@@ -16,7 +16,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import OPENAI_API_KEY
+from config import OPENAI_API_KEY, get_openai_client, LLM_MODEL
 
 
 @dataclass
@@ -40,10 +40,9 @@ def summarize_chunk(text: str) -> str:
     """
     if OPENAI_API_KEY:
         try:
-            from openai import OpenAI
-            client = OpenAI()
+            client = get_openai_client()
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": "Tóm tắt đoạn văn sau trong 2-3 câu ngắn gọn bằng tiếng Việt."},
                     {"role": "user", "content": text},
@@ -54,7 +53,7 @@ def summarize_chunk(text: str) -> str:
             if summary:
                 return summary.strip()
         except Exception as e:
-            print(f"  ⚠️  OpenAI summarize failed: {e}")
+            print(f"  ⚠️  LLM summarize failed: {e}")
 
     # Extractive fallback (không cần API):
     sentences = [s.strip() for s in text.replace("\n", " ").split(". ") if s.strip()]
@@ -74,10 +73,9 @@ def generate_hypothesis_questions(text: str, n_questions: int = 3) -> list[str]:
     """
     if OPENAI_API_KEY:
         try:
-            from openai import OpenAI
-            client = OpenAI()
+            client = get_openai_client()
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": f"Dựa trên đoạn văn, tạo {n_questions} câu hỏi mà đoạn văn có thể trả lời. Trả về mỗi câu hỏi trên 1 dòng."},
                     {"role": "user", "content": text},
@@ -90,7 +88,7 @@ def generate_hypothesis_questions(text: str, n_questions: int = 3) -> list[str]:
             if cleaned:
                 return cleaned[:n_questions]
         except Exception as e:
-            print(f"  ⚠️  OpenAI HyQA failed: {e}")
+            print(f"  ⚠️  LLM HyQA failed: {e}")
 
     # Extractive fallback
     import re
@@ -111,10 +109,9 @@ def contextual_prepend(text: str, document_title: str = "") -> str:
     """
     if OPENAI_API_KEY:
         try:
-            from openai import OpenAI
-            client = OpenAI()
+            client = get_openai_client()
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": "Viết 1 câu ngắn mô tả đoạn văn này nằm ở đâu trong tài liệu và nói về chủ đề gì. Chỉ trả về 1 câu."},
                     {"role": "user", "content": f"Tài liệu: {document_title}\n\nĐoạn văn:\n{text}"},
@@ -125,7 +122,7 @@ def contextual_prepend(text: str, document_title: str = "") -> str:
             if context:
                 return f"{context.strip()}\n\n{text}"
         except Exception as e:
-            print(f"  ⚠️  OpenAI contextual failed: {e}")
+            print(f"  ⚠️  LLM contextual failed: {e}")
 
     prefix = f"Trích từ {document_title}. " if document_title else ""
     return f"{prefix}{text}"
@@ -141,10 +138,9 @@ def extract_metadata(text: str) -> dict:
     if OPENAI_API_KEY:
         try:
             import json as _json
-            from openai import OpenAI
-            client = OpenAI()
+            client = get_openai_client()
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": 'Trích xuất metadata từ đoạn văn. Trả về JSON: {"topic": "...", "entities": ["..."], "category": "policy|hr|it|finance", "language": "vi|en"}'},
                     {"role": "user", "content": text},
@@ -156,7 +152,7 @@ def extract_metadata(text: str) -> dict:
             if raw:
                 return _json.loads(raw)
         except Exception as e:
-            print(f"  ⚠️  OpenAI metadata failed: {e}")
+            print(f"  ⚠️  LLM metadata failed: {e}")
 
     category = "policy"
     lower_t = text.lower()
@@ -178,18 +174,53 @@ def extract_metadata(text: str) -> dict:
 # ─── Combined Single-Call Mode ───────────────────────────
 
 
+ENRICHMENT_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", ".enrichment_cache.json")
+_cache = None
+
+
+def _load_cache():
+    global _cache
+    if _cache is None:
+        if os.path.exists(ENRICHMENT_CACHE_FILE):
+            try:
+                import json as _json
+                with open(ENRICHMENT_CACHE_FILE, "r", encoding="utf-8") as f:
+                    _cache = _json.load(f)
+            except Exception:
+                _cache = {}
+        else:
+            _cache = {}
+    return _cache
+
+
+def _save_cache():
+    if _cache is not None:
+        try:
+            import json as _json
+            with open(ENRICHMENT_CACHE_FILE, "w", encoding="utf-8") as f:
+                _json.dump(_cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
 def _enrich_single_call(text: str, source: str) -> dict:
     """Single LLM call to get summary + questions + context + metadata.
 
     Cost optimization: 1 API call thay vì 4 calls riêng lẻ.
     """
+    cache = _load_cache()
+    cache_key = f"{source}::{text}"
+    if cache_key in cache:
+        return cache[cache_key]
+
     if OPENAI_API_KEY:
         try:
             import json as _json
-            from openai import OpenAI
-            client = OpenAI()
+            from config import rate_limit_sleep
+            rate_limit_sleep()
+            client = get_openai_client()
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": """Phân tích đoạn văn và trả về JSON:
 {
@@ -205,16 +236,22 @@ def _enrich_single_call(text: str, source: str) -> dict:
             )
             raw = resp.choices[0].message.content
             if raw:
-                return _json.loads(raw)
+                result = _json.loads(raw)
+                cache[cache_key] = result
+                _save_cache()
+                return result
         except Exception as e:
-            print(f"  ⚠️  Enrichment API failed: {e}")
+            print(f"  ⚠️  LLM enrichment API failed: {e}")
 
-    return {
+    result = {
         "summary": summarize_chunk(text),
         "questions": generate_hypothesis_questions(text, n_questions=3),
         "context": f"Trích từ tài liệu {source}." if source else "",
         "metadata": extract_metadata(text)
     }
+    cache[cache_key] = result
+    _save_cache()
+    return result
 
 
 # ─── Full Enrichment Pipeline ────────────────────────────

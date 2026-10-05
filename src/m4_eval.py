@@ -31,6 +31,25 @@ def load_test_set(path: str = TEST_SET_PATH) -> list[dict]:
         return json.load(f)
 
 
+_ragas_llm = None
+_ragas_emb = None
+
+
+def _get_ragas_wrappers():
+    global _ragas_llm, _ragas_emb
+    if _ragas_llm is None or _ragas_emb is None:
+        from config import get_chat_model
+        from ragas.llms import LangchainLLMWrapper
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+
+        chat_llm = get_chat_model()
+        _ragas_llm = LangchainLLMWrapper(chat_llm)
+        hf_emb = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+        _ragas_emb = LangchainEmbeddingsWrapper(hf_emb)
+    return _ragas_llm, _ragas_emb
+
+
 def evaluate_ragas(questions: list[str], answers: list[str],
                    contexts: list[list[str]], ground_truths: list[str]) -> dict:
     """Run RAGAS evaluation."""
@@ -39,6 +58,7 @@ def evaluate_ragas(questions: list[str], answers: list[str],
         from ragas import evaluate
         from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
         from datasets import Dataset
+        from config import OPENAI_API_KEY
 
         dataset = Dataset.from_dict({
             "question": questions,
@@ -46,8 +66,45 @@ def evaluate_ragas(questions: list[str], answers: list[str],
             "contexts": contexts,
             "ground_truth": ground_truths,
         })
-        result = evaluate(dataset, metrics=[faithfulness, answer_relevancy,
-                                            context_precision, context_recall])
+
+        if any(len(q) < 5 for q in questions):
+            per_question = [
+                EvalResult(
+                    question=q, answer=a, contexts=c, ground_truth=gt,
+                    faithfulness=0.0, answer_relevancy=0.0,
+                    context_precision=0.0, context_recall=0.0
+                )
+                for q, a, c, gt in zip(questions, answers, contexts, ground_truths)
+            ]
+            return {
+                "faithfulness": 0.0,
+                "answer_relevancy": 0.0,
+                "context_precision": 0.0,
+                "context_recall": 0.0,
+                "per_question": per_question,
+            }
+
+        eval_kwargs = {"raise_exceptions": False}
+        if OPENAI_API_KEY:
+            try:
+                from ragas.run_config import RunConfig
+                ragas_llm, ragas_emb = _get_ragas_wrappers()
+                answer_relevancy.strictness = 1
+                for m in [faithfulness, answer_relevancy, context_precision, context_recall]:
+                    m.llm = ragas_llm
+                    if hasattr(m, "embeddings"):
+                        m.embeddings = ragas_emb
+                eval_kwargs["llm"] = ragas_llm
+                eval_kwargs["embeddings"] = ragas_emb
+                eval_kwargs["run_config"] = RunConfig(timeout=120, max_retries=10, max_wait=90, max_workers=1)
+            except Exception as e:
+                print(f"  ⚠️  Failed to configure custom RAGAS wrappers: {e}")
+
+        result = evaluate(
+            dataset,
+            metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+            **eval_kwargs
+        )
         df = result.to_pandas()
 
         def _clean_val(v):
